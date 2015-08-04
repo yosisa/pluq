@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/boltdb/bolt"
+	"github.com/yosisa/pluq/event"
 	"github.com/yosisa/pluq/storage"
 	"github.com/yosisa/pluq/uid"
 )
@@ -159,6 +160,11 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (msg *storage.Message, err er
 		if schedule == nil {
 			return ErrBucketNotFound
 		}
+		message := tx.Bucket(bucketMessage)
+		if schedule == nil {
+			return ErrBucketNotFound
+		}
+
 		c := schedule.Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			skey := scheduleKey(k)
@@ -167,8 +173,15 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (msg *storage.Message, err er
 				return storage.ErrEmpty
 			}
 			if !storage.CanRetry(sval.retry()) {
+				var msg *storage.Message
+				if b := message.Get(sval.messageID()); b != nil {
+					msg, _ = reconstruct(sval, b)
+				}
 				if err := schedule.Delete(k); err != nil {
 					return err
+				}
+				if msg != nil {
+					event.Emit(event.EventMessageDiscarded, msg)
 				}
 				continue
 			}
@@ -210,20 +223,7 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (msg *storage.Message, err er
 	if err != nil {
 		return
 	}
-
-	var m *Message
-	m, err = unmarshal(data)
-	if err != nil {
-		return
-	}
-	msg = &storage.Message{
-		Body:        m.Body,
-		ContentType: m.ContentType,
-		Meta:        m.Meta,
-		Retry:       sd.retry(),
-		Timeout:     time.Duration(sd.timeout()),
-	}
-	return
+	return reconstruct(sd, data)
 }
 
 func (d *Driver) Ack(eid uid.ID) (err error) {

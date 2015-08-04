@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yosisa/pluq/event"
 	"github.com/yosisa/pluq/storage"
 	"github.com/yosisa/pluq/uid"
 )
@@ -79,6 +80,7 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (m *storage.Message, err erro
 			break
 		}
 		if !msg.m.CanRetry() {
+			event.Emit(event.EventMessageDiscarded, msg.m)
 			msg.removed = true
 		}
 		if msg.removed {

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/jawher/mow.cli"
+	"github.com/yosisa/pluq/event"
 	"github.com/yosisa/pluq/server"
 	"github.com/yosisa/pluq/storage"
 	"github.com/yosisa/pluq/storage/bolt"
@@ -26,6 +27,11 @@ func newStorageDriver(s string) (storage.Driver, error) {
 }
 
 func main() {
+	event.HandleAll(event.HandlerFunc(func(e event.EventType, v interface{}) {
+		log.Printf("Event #%d: %+v", e, v)
+	}))
+	go event.Dispatch()
+
 	app := cli.App("pluq", "A pluggable message queue")
 	storageDriver := app.StringOpt("storage-driver", "bolt", "Change the storage driver (bolt|memory)")
 	listen := app.StringOpt("l listen", ":3900", "Listen address")

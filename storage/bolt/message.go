@@ -1,6 +1,10 @@
 package bolt
 
-import "github.com/yosisa/pluq/storage"
+import (
+	"time"
+
+	"github.com/yosisa/pluq/storage"
+)
 
 //go:generate msgp
 type Message struct {
@@ -22,4 +26,19 @@ func unmarshal(b []byte) (*Message, error) {
 	var m Message
 	_, err := m.UnmarshalMsg(b)
 	return &m, err
+}
+
+func reconstruct(sd scheduleData, b []byte) (*storage.Message, error) {
+	m, err := unmarshal(b)
+	if err != nil {
+		return nil, err
+	}
+	msg := &storage.Message{
+		Body:        m.Body,
+		ContentType: m.ContentType,
+		Meta:        m.Meta,
+		Retry:       sd.retry(),
+		Timeout:     time.Duration(sd.timeout()),
+	}
+	return msg, nil
 }
