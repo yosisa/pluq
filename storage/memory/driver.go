@@ -12,7 +12,7 @@ import (
 type message struct {
 	availAt int64
 	queue   string
-	body    []byte
+	m       *storage.Message
 	eid     uid.ID
 	removed bool
 }
@@ -57,11 +57,11 @@ func New() *Driver {
 	return d
 }
 
-func (d *Driver) Enqueue(queue string, id uid.ID, body []byte) error {
+func (d *Driver) Enqueue(queue string, id uid.ID, m *storage.Message) error {
 	msg := &message{
 		availAt: time.Now().UnixNano(),
 		queue:   queue,
-		body:    body,
+		m:       m,
 	}
 	d.m.Lock()
 	defer d.m.Unlock()
@@ -69,7 +69,7 @@ func (d *Driver) Enqueue(queue string, id uid.ID, body []byte) error {
 	return nil
 }
 
-func (d *Driver) Dequeue(queue string, eid uid.ID) (body []byte, err error) {
+func (d *Driver) Dequeue(queue string, eid uid.ID) (m *storage.Message, err error) {
 	now := time.Now().UnixNano()
 	d.m.Lock()
 	defer d.m.Unlock()
@@ -78,6 +78,9 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (body []byte, err error) {
 		if msg.availAt > now {
 			break
 		}
+		if !msg.m.CanRetry() {
+			msg.removed = true
+		}
 		if msg.removed {
 			heap.Remove(&d.schedule, i)
 			i--
@@ -85,9 +88,10 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (body []byte, err error) {
 			continue
 		}
 		if msg.queue == queue {
-			body = msg.body
+			m = msg.m
 			msg.eid = eid
-			msg.availAt = now + int64(storage.RetryWait)
+			msg.availAt = now + int64(msg.m.Timeout)
+			msg.m.DecrRetry()
 			heap.Fix(&d.schedule, i)
 			d.ephemeralIndex[eid] = msg
 			return

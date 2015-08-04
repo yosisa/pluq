@@ -2,7 +2,6 @@ package storage
 
 import (
 	"errors"
-	"time"
 
 	"github.com/yosisa/pluq/uid"
 	"golang.org/x/net/context"
@@ -13,11 +12,9 @@ var (
 	ErrInvalidEphemeralID = errors.New("Error invalid ephemeral id")
 )
 
-var RetryWait = 30 * time.Second
-
 type Driver interface {
-	Enqueue(string, uid.ID, []byte) error
-	Dequeue(string, uid.ID) ([]byte, error)
+	Enqueue(string, uid.ID, *Message) error
+	Dequeue(string, uid.ID) (*Message, error)
 	Ack(uid.ID) error
 	Close() error
 }

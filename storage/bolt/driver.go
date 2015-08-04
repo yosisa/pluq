@@ -46,6 +46,33 @@ func (b scheduleKey) queue() string {
 	return string(b[8:])
 }
 
+type scheduleData []byte
+
+func newScheduleData(id uid.ID, retry int32, timeout int64) scheduleData {
+	n := 8 + 4*8
+	b := make([]byte, n, n)
+	copy(b, id.Bytes())
+	binary.BigEndian.PutUint32(b[8:], uint32(retry))
+	binary.BigEndian.PutUint64(b[12:], uint64(timeout))
+	return b
+}
+
+func (b scheduleData) messageID() []byte {
+	return b[:8]
+}
+
+func (b scheduleData) retry() int {
+	return int(binary.BigEndian.Uint32(b[8:]))
+}
+
+func (b scheduleData) setRetry(n int) {
+	binary.BigEndian.PutUint32(b[8:], uint32(n))
+}
+
+func (b scheduleData) timeout() int64 {
+	return int64(binary.BigEndian.Uint64(b[12:]))
+}
+
 type replyData []byte
 
 func newReplyData(msgid []byte, skey scheduleKey) replyData {
@@ -85,8 +112,13 @@ func New(dbpath string) (*Driver, error) {
 	return d, nil
 }
 
-func (d *Driver) Enqueue(queue string, id uid.ID, body []byte) error {
+func (d *Driver) Enqueue(queue string, id uid.ID, msg *storage.Message) error {
 	skey := newScheduleKey(queue)
+	sval := newScheduleData(id, int32(msg.Retry), int64(msg.Timeout))
+	b, err := marshal(msg)
+	if err != nil {
+		return err
+	}
 	for {
 		t := time.Now().UnixNano()
 		skey.setTimestamp(t)
@@ -99,14 +131,14 @@ func (d *Driver) Enqueue(queue string, id uid.ID, body []byte) error {
 			if err != nil {
 				return err
 			}
-			if err = message.Put(id.Bytes(), body); err != nil {
-				return err
-			}
 			val := schedule.Get(skey)
 			if val != nil {
 				return errConflict
 			}
-			return schedule.Put(skey, id.Bytes())
+			if err = message.Put(id.Bytes(), b); err != nil {
+				return err
+			}
+			return schedule.Put(skey, sval)
 		})
 		if err == errConflict {
 			continue
@@ -115,8 +147,8 @@ func (d *Driver) Enqueue(queue string, id uid.ID, body []byte) error {
 	}
 }
 
-func (d *Driver) Dequeue(queue string, eid uid.ID) (body []byte, err error) {
-	var msgid []byte
+func (d *Driver) Dequeue(queue string, eid uid.ID) (msg *storage.Message, err error) {
+	var sd scheduleData
 	now := time.Now().UnixNano()
 	err = d.db.Update(func(tx *bolt.Tx) error {
 		ridx, err := tx.CreateBucketIfNotExists(bucketReplyIndex)
@@ -130,21 +162,30 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (body []byte, err error) {
 		c := schedule.Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			skey := scheduleKey(k)
+			sval := scheduleData(v)
 			if skey.timestamp() > now {
 				return storage.ErrEmpty
 			}
-			if skey.queue() == queue {
-				newkey := cloneBytes(k)
-				msgid = cloneBytes(v)
+			if !storage.CanRetry(sval.retry()) {
 				if err := schedule.Delete(k); err != nil {
 					return err
 				}
-				nextTick := now + int64(storage.RetryWait)
-				scheduleKey(newkey).setTimestamp(nextTick)
-				if err := schedule.Put(newkey, msgid); err != nil {
+				continue
+			}
+			if skey.queue() == queue {
+				newkey := scheduleKey(cloneBytes(k))
+				sd = scheduleData(cloneBytes(v))
+				if err := schedule.Delete(k); err != nil {
 					return err
 				}
-				return ridx.Put(eid.Bytes(), newReplyData(msgid, scheduleKey(newkey)))
+
+				nextTick := now + sd.timeout()
+				newkey.setTimestamp(nextTick)
+				sd.setRetry(storage.DecrRetry(sd.retry()))
+				if err := schedule.Put(newkey, sd); err != nil {
+					return err
+				}
+				return ridx.Put(eid.Bytes(), newReplyData(sd.messageID(), scheduleKey(newkey)))
 			}
 		}
 		return storage.ErrEmpty
@@ -152,18 +193,36 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (body []byte, err error) {
 	if err != nil {
 		return
 	}
+
+	var data []byte
 	err = d.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(bucketMessage)
 		if bucket == nil {
 			return ErrBucketNotFound
 		}
-		b := bucket.Get(msgid)
+		b := bucket.Get(sd.messageID())
 		if b == nil {
 			return ErrMessageNotFound
 		}
-		body = cloneBytes(b)
+		data = cloneBytes(b)
 		return nil
 	})
+	if err != nil {
+		return
+	}
+
+	var m *Message
+	m, err = unmarshal(data)
+	if err != nil {
+		return
+	}
+	msg = &storage.Message{
+		Body:        m.Body,
+		ContentType: m.ContentType,
+		Meta:        m.Meta,
+		Retry:       sd.retry(),
+		Timeout:     time.Duration(sd.timeout()),
+	}
 	return
 }
 
