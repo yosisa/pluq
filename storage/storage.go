@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"time"
 
 	"github.com/yosisa/pluq/uid"
 	"golang.org/x/net/context"
@@ -13,10 +14,26 @@ var (
 )
 
 type Driver interface {
-	Enqueue(string, uid.ID, *Envelope) error
+	Enqueue(string, uid.ID, *Envelope, *EnqueueOptions) (*EnqueueMeta, error)
 	Dequeue(string, uid.ID) (*Envelope, error)
 	Ack(uid.ID) error
 	Close() error
+}
+
+type EnqueueOptions struct {
+	AccumTime time.Duration
+}
+
+type AccumState int
+
+const (
+	AccumDisabled AccumState = iota
+	AccumStarted
+	AccumAdded
+)
+
+type EnqueueMeta struct {
+	AccumState AccumState
 }
 
 type key int

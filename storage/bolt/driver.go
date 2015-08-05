@@ -113,12 +113,13 @@ func New(dbpath string) (*Driver, error) {
 	return d, nil
 }
 
-func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope) error {
+func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope, opts *storage.EnqueueOptions) (*storage.EnqueueMeta, error) {
+	var meta storage.EnqueueMeta
 	skey := newScheduleKey(queue)
 	sval := newScheduleData(id, int32(e.Retry), int64(e.Timeout))
 	b, err := marshal(e)
 	if err != nil {
-		return err
+		return &meta, err
 	}
 	for {
 		t := time.Now().UnixNano()
@@ -144,7 +145,7 @@ func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope) error {
 		if err == errConflict {
 			continue
 		}
-		return err
+		return &meta, err
 	}
 }
 

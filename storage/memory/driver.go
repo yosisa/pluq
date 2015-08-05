@@ -11,11 +11,12 @@ import (
 )
 
 type message struct {
-	availAt  int64
-	queue    string
-	envelope *storage.Envelope
-	eid      uid.ID
-	removed  bool
+	availAt     int64
+	queue       string
+	envelope    *storage.Envelope
+	eid         uid.ID
+	removed     bool
+	accumlating bool
 }
 
 type messageHeap []*message
@@ -58,16 +59,35 @@ func New() *Driver {
 	return d
 }
 
-func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope) error {
+func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope, opts *storage.EnqueueOptions) (*storage.EnqueueMeta, error) {
+	var meta storage.EnqueueMeta
+	now := time.Now().UnixNano()
+	if opts.AccumTime > 0 {
+		for _, msg := range d.schedule {
+			if msg.availAt > now && msg.accumlating && msg.queue == queue {
+				meta.AccumState = storage.AccumAdded
+				d.m.Lock()
+				defer d.m.Unlock()
+				msg.envelope.AddMessage(e.Messages[0])
+				return &meta, nil
+			}
+		}
+	}
+
 	msg := &message{
-		availAt:  time.Now().UnixNano(),
+		availAt:  now,
 		queue:    queue,
 		envelope: e,
+	}
+	if opts.AccumTime > 0 {
+		msg.availAt += int64(opts.AccumTime)
+		msg.accumlating = true
+		meta.AccumState = storage.AccumStarted
 	}
 	d.m.Lock()
 	defer d.m.Unlock()
 	heap.Push(&d.schedule, msg)
-	return nil
+	return &meta, nil
 }
 
 func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err error) {
@@ -94,6 +114,7 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err err
 			msg.eid = eid
 			msg.availAt = now + int64(msg.envelope.Timeout)
 			msg.envelope.DecrRetry()
+			msg.accumlating = false
 			heap.Fix(&d.schedule, i)
 			d.ephemeralIndex[eid] = msg
 			return

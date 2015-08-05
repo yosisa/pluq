@@ -3,7 +3,9 @@ package server
 import (
 	"fmt"
 	"io/ioutil"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strconv"
 	"time"
 
@@ -24,7 +26,25 @@ func push(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return driver.Enqueue(queue, id, msg)
+	var opts storage.EnqueueOptions
+	if s := r.URL.Query().Get("accum_time"); s != "" {
+		if opts.AccumTime, err = time.ParseDuration(s); err != nil {
+			return err
+		}
+	}
+	meta, err := driver.Enqueue(queue, id, msg, &opts)
+	if err != nil {
+		return err
+	}
+	accum := "disabled"
+	switch meta.AccumState {
+	case storage.AccumStarted:
+		accum = "started"
+	case storage.AccumAdded:
+		accum = "added"
+	}
+	fmt.Fprintf(w, `{"accum_state":"%s"}`, accum)
+	return nil
 }
 
 func pop(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
@@ -38,8 +58,7 @@ func pop(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	writeHTTP(w, eid, envelope)
-	return nil
+	return writeHTTP(w, eid, envelope)
 }
 
 func reply(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
@@ -89,12 +108,25 @@ func newEnvelope(r *http.Request) (*storage.Envelope, error) {
 	return envelope, nil
 }
 
-func writeHTTP(w http.ResponseWriter, eid uid.ID, e *storage.Envelope) {
+func writeHTTP(w http.ResponseWriter, eid uid.ID, e *storage.Envelope) error {
 	w.Header().Set("X-Pluq-Message-Id", eid.HashID())
 	w.Header().Set("X-Pluq-Retry-Remaining", strconv.Itoa(e.Retry))
 	w.Header().Set("X-Pluq-Timeout", e.Timeout.String())
 	if !e.IsComposite() {
 		w.Header().Set("Content-Type", e.Messages[0].ContentType)
 		w.Write(e.Messages[0].Body)
+		return nil
 	}
+	mw := multipart.NewWriter(w)
+	defer mw.Close()
+	for _, msg := range e.Messages {
+		mh := make(textproto.MIMEHeader)
+		mh.Set("Content-Type", msg.ContentType)
+		pw, err := mw.CreatePart(mh)
+		if err != nil {
+			return err
+		}
+		pw.Write(msg.Body)
+	}
+	return nil
 }
