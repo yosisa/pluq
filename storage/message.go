@@ -9,32 +9,43 @@ var (
 	DefaultTimeout = 30 * time.Second
 )
 
-type Message struct {
-	Body        []byte
-	ContentType string
-	Meta        map[string]interface{}
-	Retry       int
-	Timeout     time.Duration
+type Envelope struct {
+	Retry    int
+	Timeout  time.Duration
+	Messages []*Message
 }
 
-func NewMessage() *Message {
-	return &Message{
-		Meta:    make(map[string]interface{}),
+func NewEnvelope() *Envelope {
+	return &Envelope{
 		Retry:   DefaultRetry,
 		Timeout: DefaultTimeout,
 	}
 }
 
-func (m *Message) IncrRetry() {
-	m.Retry = IncrRetry(m.Retry)
+func (e *Envelope) AddMessage(m *Message) {
+	e.Messages = append(e.Messages, m)
 }
 
-func (m *Message) DecrRetry() {
-	m.Retry = DecrRetry(m.Retry)
+func (e *Envelope) IsComposite() bool {
+	return len(e.Messages) > 1
 }
 
-func (m *Message) CanRetry() bool {
-	return CanRetry(m.Retry)
+func (e *Envelope) IncrRetry() {
+	e.Retry = IncrRetry(e.Retry)
+}
+
+func (e *Envelope) DecrRetry() {
+	e.Retry = DecrRetry(e.Retry)
+}
+
+func (e *Envelope) CanRetry() bool {
+	return CanRetry(e.Retry)
+}
+
+type Message struct {
+	ContentType string
+	Meta        map[string]interface{}
+	Body        []byte
 }
 
 func IncrRetry(n int) int {

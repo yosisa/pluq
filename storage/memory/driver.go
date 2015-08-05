@@ -11,11 +11,11 @@ import (
 )
 
 type message struct {
-	availAt int64
-	queue   string
-	m       *storage.Message
-	eid     uid.ID
-	removed bool
+	availAt  int64
+	queue    string
+	envelope *storage.Envelope
+	eid      uid.ID
+	removed  bool
 }
 
 type messageHeap []*message
@@ -58,11 +58,11 @@ func New() *Driver {
 	return d
 }
 
-func (d *Driver) Enqueue(queue string, id uid.ID, m *storage.Message) error {
+func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope) error {
 	msg := &message{
-		availAt: time.Now().UnixNano(),
-		queue:   queue,
-		m:       m,
+		availAt:  time.Now().UnixNano(),
+		queue:    queue,
+		envelope: e,
 	}
 	d.m.Lock()
 	defer d.m.Unlock()
@@ -70,7 +70,7 @@ func (d *Driver) Enqueue(queue string, id uid.ID, m *storage.Message) error {
 	return nil
 }
 
-func (d *Driver) Dequeue(queue string, eid uid.ID) (m *storage.Message, err error) {
+func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err error) {
 	now := time.Now().UnixNano()
 	d.m.Lock()
 	defer d.m.Unlock()
@@ -79,8 +79,8 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (m *storage.Message, err erro
 		if msg.availAt > now {
 			break
 		}
-		if !msg.m.CanRetry() {
-			event.Emit(event.EventMessageDiscarded, msg.m)
+		if !msg.envelope.CanRetry() {
+			event.Emit(event.EventMessageDiscarded, msg.envelope)
 			msg.removed = true
 		}
 		if msg.removed {
@@ -90,10 +90,10 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (m *storage.Message, err erro
 			continue
 		}
 		if msg.queue == queue {
-			m = msg.m
+			e = msg.envelope
 			msg.eid = eid
-			msg.availAt = now + int64(msg.m.Timeout)
-			msg.m.DecrRetry()
+			msg.availAt = now + int64(msg.envelope.Timeout)
+			msg.envelope.DecrRetry()
 			heap.Fix(&d.schedule, i)
 			d.ephemeralIndex[eid] = msg
 			return

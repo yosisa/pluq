@@ -13,8 +13,8 @@ var (
 )
 
 type Driver interface {
-	Enqueue(string, uid.ID, *Message) error
-	Dequeue(string, uid.ID) (*Message, error)
+	Enqueue(string, uid.ID, *Envelope) error
+	Dequeue(string, uid.ID) (*Envelope, error)
 	Ack(uid.ID) error
 	Close() error
 }

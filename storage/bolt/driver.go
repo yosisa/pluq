@@ -113,10 +113,10 @@ func New(dbpath string) (*Driver, error) {
 	return d, nil
 }
 
-func (d *Driver) Enqueue(queue string, id uid.ID, msg *storage.Message) error {
+func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope) error {
 	skey := newScheduleKey(queue)
-	sval := newScheduleData(id, int32(msg.Retry), int64(msg.Timeout))
-	b, err := marshal(msg)
+	sval := newScheduleData(id, int32(e.Retry), int64(e.Timeout))
+	b, err := marshal(e)
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (d *Driver) Enqueue(queue string, id uid.ID, msg *storage.Message) error {
 	}
 }
 
-func (d *Driver) Dequeue(queue string, eid uid.ID) (msg *storage.Message, err error) {
+func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err error) {
 	var sd scheduleData
 	now := time.Now().UnixNano()
 	err = d.db.Update(func(tx *bolt.Tx) error {
@@ -173,15 +173,15 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (msg *storage.Message, err er
 				return storage.ErrEmpty
 			}
 			if !storage.CanRetry(sval.retry()) {
-				var msg *storage.Message
+				var envelope *storage.Envelope
 				if b := message.Get(sval.messageID()); b != nil {
-					msg, _ = reconstruct(sval, b)
+					envelope, _ = reconstruct(sval, b)
 				}
 				if err := schedule.Delete(k); err != nil {
 					return err
 				}
-				if msg != nil {
-					event.Emit(event.EventMessageDiscarded, msg)
+				if envelope != nil {
+					event.Emit(event.EventMessageDiscarded, envelope)
 				}
 				continue
 			}
