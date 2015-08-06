@@ -3,7 +3,9 @@ package server
 import (
 	"fmt"
 	"io/ioutil"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strconv"
 	"time"
 
@@ -20,11 +22,29 @@ func push(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	msg, err := newMessage(r)
+	msg, err := newEnvelope(r)
 	if err != nil {
 		return err
 	}
-	return driver.Enqueue(queue, id, msg)
+	var opts storage.EnqueueOptions
+	if s := r.URL.Query().Get("accum_time"); s != "" {
+		if opts.AccumTime, err = time.ParseDuration(s); err != nil {
+			return err
+		}
+	}
+	meta, err := driver.Enqueue(queue, id, msg, &opts)
+	if err != nil {
+		return err
+	}
+	accum := "disabled"
+	switch meta.AccumState {
+	case storage.AccumStarted:
+		accum = "started"
+	case storage.AccumAdded:
+		accum = "added"
+	}
+	fmt.Fprintf(w, `{"accum_state":"%s"}`, accum)
+	return nil
 }
 
 func pop(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
@@ -34,16 +54,11 @@ func pop(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	msg, err := driver.Dequeue(queue, eid)
+	envelope, err := driver.Dequeue(queue, eid)
 	if err != nil {
 		return err
 	}
-	w.Header().Set("X-Pluq-Message-Id", eid.HashID())
-	w.Header().Set("X-Pluq-Retry-Remaining", strconv.Itoa(msg.Retry))
-	w.Header().Set("X-Pluq-Timeout", msg.Timeout.String())
-	w.Header().Set("Content-Type", msg.ContentType)
-	w.Write(msg.Body)
-	return nil
+	return writeHTTP(w, eid, envelope)
 }
 
 func reply(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
@@ -59,35 +74,59 @@ func reply(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func newMessage(r *http.Request) (*storage.Message, error) {
-	b, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		return nil, err
-	}
-	msg := storage.NewMessage()
-	msg.Body = b
-
+func newEnvelope(r *http.Request) (*storage.Envelope, error) {
+	envelope := storage.NewEnvelope()
 	if s := r.URL.Query().Get("retry"); s != "" {
 		if s == "nolimit" {
-			msg.Retry = storage.RetryNoLimit
+			envelope.Retry = storage.RetryNoLimit
 		} else {
 			n, err := strconv.Atoi(s)
 			if err != nil {
 				return nil, err
 			}
-			msg.Retry = n
+			envelope.Retry = n
 		}
 	}
-	msg.IncrRetry() // +1 for first attempt
+	envelope.IncrRetry() // +1 for first attempt
 
 	if s := r.URL.Query().Get("timeout"); s != "" {
 		d, err := time.ParseDuration(s)
 		if err != nil {
 			return nil, err
 		}
-		msg.Timeout = d
+		envelope.Timeout = d
 	}
 
-	msg.ContentType = r.Header.Get("Content-Type")
-	return msg, nil
+	b, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	envelope.AddMessage(&storage.Message{
+		ContentType: r.Header.Get("Content-Type"),
+		Body:        b,
+	})
+	return envelope, nil
+}
+
+func writeHTTP(w http.ResponseWriter, eid uid.ID, e *storage.Envelope) error {
+	w.Header().Set("X-Pluq-Message-Id", eid.HashID())
+	w.Header().Set("X-Pluq-Retry-Remaining", strconv.Itoa(e.Retry))
+	w.Header().Set("X-Pluq-Timeout", e.Timeout.String())
+	if !e.IsComposite() {
+		w.Header().Set("Content-Type", e.Messages[0].ContentType)
+		w.Write(e.Messages[0].Body)
+		return nil
+	}
+	mw := multipart.NewWriter(w)
+	defer mw.Close()
+	for _, msg := range e.Messages {
+		mh := make(textproto.MIMEHeader)
+		mh.Set("Content-Type", msg.ContentType)
+		pw, err := mw.CreatePart(mh)
+		if err != nil {
+			return err
+		}
+		pw.Write(msg.Body)
+	}
+	return nil
 }
