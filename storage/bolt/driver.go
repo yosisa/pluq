@@ -29,7 +29,7 @@ var (
 type scheduleKey []byte
 
 func newScheduleKey(queue string) scheduleKey {
-	n := 8 + len(queue)
+	n := 8 + len(queue) + 1
 	b := make([]byte, n, n)
 	copy(b[8:], []byte(queue))
 	return scheduleKey(b)
@@ -44,7 +44,19 @@ func (b scheduleKey) setTimestamp(t int64) {
 }
 
 func (b scheduleKey) queue() string {
-	return string(b[8:])
+	return string(b[8 : len(b)-1])
+}
+
+func (b scheduleKey) accumlating() bool {
+	return b[len(b)-1] != 0
+}
+
+func (b scheduleKey) setAccumlating(enable bool) {
+	if enable {
+		b[len(b)-1] = 1
+	} else {
+		b[len(b)-1] = 0
+	}
 }
 
 type scheduleData []byte
@@ -114,15 +126,61 @@ func New(dbpath string) (*Driver, error) {
 }
 
 func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope, opts *storage.EnqueueOptions) (*storage.EnqueueMeta, error) {
-	var meta storage.EnqueueMeta
-	skey := newScheduleKey(queue)
-	sval := newScheduleData(id, int32(e.Retry), int64(e.Timeout))
-	b, err := marshal(e)
+	msg, err := marshal(e)
 	if err != nil {
-		return &meta, err
+		return nil, err
 	}
+
+	var meta storage.EnqueueMeta
+	if opts.AccumTime > 0 {
+		now := time.Now().UnixNano()
+		err = d.db.Update(func(tx *bolt.Tx) error {
+			schedule := tx.Bucket(bucketSchedule)
+			message := tx.Bucket(bucketMessage)
+			if schedule == nil || message == nil {
+				return ErrBucketNotFound
+			}
+			c := schedule.Cursor()
+			for k, v := c.First(); k != nil; k, v = c.Next() {
+				sk := scheduleKey(k)
+				if sk.timestamp() <= now {
+					continue
+				}
+				if sk.queue() == queue && sk.accumlating() {
+					sd := scheduleData(v)
+					b := message.Get(sd.messageID())
+					if b == nil {
+						continue
+					}
+					meta.AccumState = storage.AccumAdded
+					data := make([]byte, len(b)+len(msg))
+					n := copy(data, b)
+					copy(data[n:], msg)
+					return message.Put(sd.messageID(), data)
+				}
+			}
+			return ErrMessageNotFound
+		})
+		switch err {
+		case nil:
+			return &meta, nil
+		case ErrMessageNotFound, ErrBucketNotFound:
+		default:
+			return nil, err
+		}
+	}
+
+	skey := newScheduleKey(queue)
+	if opts.AccumTime > 0 {
+		skey.setAccumlating(true)
+		meta.AccumState = storage.AccumStarted
+	}
+	sval := newScheduleData(id, int32(e.Retry), int64(e.Timeout))
 	for {
 		t := time.Now().UnixNano()
+		if opts.AccumTime > 0 {
+			t += int64(opts.AccumTime)
+		}
 		skey.setTimestamp(t)
 		err := d.db.Update(func(tx *bolt.Tx) error {
 			message, err := tx.CreateBucketIfNotExists(bucketMessage)
@@ -137,7 +195,7 @@ func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope, opts *sto
 			if val != nil {
 				return errConflict
 			}
-			if err = message.Put(id.Bytes(), b); err != nil {
+			if err = message.Put(id.Bytes(), msg); err != nil {
 				return err
 			}
 			return schedule.Put(skey, sval)
@@ -195,6 +253,7 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err err
 
 				nextTick := now + sd.timeout()
 				newkey.setTimestamp(nextTick)
+				newkey.setAccumlating(false)
 				sd.setRetry(storage.DecrRetry(sd.retry()))
 				if err := schedule.Put(newkey, sd); err != nil {
 					return err

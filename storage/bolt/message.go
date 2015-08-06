@@ -1,8 +1,11 @@
 package bolt
 
 import (
+	"bytes"
+	"io"
 	"time"
 
+	"github.com/tinylib/msgp/msgp"
 	"github.com/yosisa/pluq/storage"
 )
 
@@ -22,23 +25,35 @@ func marshal(src *storage.Envelope) ([]byte, error) {
 	return m.MarshalMsg(nil)
 }
 
-func unmarshal(b []byte) (*Message, error) {
-	var m Message
-	_, err := m.UnmarshalMsg(b)
-	return &m, err
+func unmarshal(b []byte) (out []*Message, err error) {
+	r := msgp.NewReader(bytes.NewReader(b))
+	for {
+		var m Message
+		if err = m.DecodeMsg(r); err != nil {
+			if err == io.EOF {
+				err = nil
+			}
+			return
+		}
+		out = append(out, &m)
+	}
 }
 
 func reconstruct(sd scheduleData, b []byte) (*storage.Envelope, error) {
-	m, err := unmarshal(b)
+	ms, err := unmarshal(b)
 	if err != nil {
 		return nil, err
 	}
 	envelope := &storage.Envelope{
 		Retry:   sd.retry(),
 		Timeout: time.Duration(sd.timeout()),
-		Messages: []*storage.Message{
-			{ContentType: m.ContentType, Meta: m.Meta, Body: m.Body},
-		},
+	}
+	for _, m := range ms {
+		envelope.AddMessage(&storage.Message{
+			ContentType: m.ContentType,
+			Meta:        m.Meta,
+			Body:        m.Body,
+		})
 	}
 	return envelope, nil
 }
