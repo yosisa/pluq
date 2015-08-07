@@ -12,7 +12,6 @@ import (
 
 type message struct {
 	availAt     int64
-	queue       string
 	envelope    *storage.Envelope
 	eid         uid.ID
 	removed     bool
@@ -45,29 +44,56 @@ func (h *messageHeap) Pop() interface{} {
 	return x
 }
 
+type queueIndex struct {
+	index map[string]*messageHeap
+	m     sync.Mutex
+}
+
+func newQueueIndex() *queueIndex {
+	return &queueIndex{
+		index: make(map[string]*messageHeap),
+	}
+}
+
+func (q *queueIndex) get(name string) *messageHeap {
+	if h, ok := q.index[name]; ok {
+		return h
+	}
+	q.m.Lock()
+	defer q.m.Unlock()
+	if h, ok := q.index[name]; ok {
+		return h
+	}
+	var mh messageHeap
+	q.index[name] = &mh
+	return &mh
+}
+
 type Driver struct {
-	schedule       messageHeap
+	queues         *queueIndex
 	ephemeralIndex map[uid.ID]*message
 	m              sync.Mutex
 }
 
 func New() *Driver {
 	d := &Driver{
+		queues:         newQueueIndex(),
 		ephemeralIndex: make(map[uid.ID]*message),
 	}
-	heap.Init(&d.schedule)
 	return d
 }
 
 func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope, opts *storage.EnqueueOptions) (*storage.EnqueueMeta, error) {
 	var meta storage.EnqueueMeta
+	msgs := d.queues.get(queue)
 	now := time.Now().UnixNano()
+
+	d.m.Lock()
+	defer d.m.Unlock()
 	if opts.AccumTime > 0 {
-		for _, msg := range d.schedule {
-			if msg.availAt > now && msg.accumlating && msg.queue == queue {
+		for _, msg := range *msgs {
+			if msg.availAt > now && msg.accumlating {
 				meta.AccumState = storage.AccumAdded
-				d.m.Lock()
-				defer d.m.Unlock()
 				msg.envelope.AddMessage(e.Messages[0])
 				return &meta, nil
 			}
@@ -76,7 +102,6 @@ func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope, opts *sto
 
 	msg := &message{
 		availAt:  now,
-		queue:    queue,
 		envelope: e,
 	}
 	if opts.AccumTime > 0 {
@@ -84,9 +109,7 @@ func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope, opts *sto
 		msg.accumlating = true
 		meta.AccumState = storage.AccumStarted
 	}
-	d.m.Lock()
-	defer d.m.Unlock()
-	heap.Push(&d.schedule, msg)
+	heap.Push(msgs, msg)
 	return &meta, nil
 }
 
@@ -94,8 +117,9 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err err
 	now := time.Now().UnixNano()
 	d.m.Lock()
 	defer d.m.Unlock()
-	for i, n := 0, len(d.schedule); i < n; i++ {
-		msg := d.schedule[i]
+	msgs := d.queues.get(queue)
+	for i, n := 0, len(*msgs); i < n; i++ {
+		msg := (*msgs)[i]
 		if msg.availAt > now {
 			break
 		}
@@ -104,21 +128,19 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err err
 			msg.removed = true
 		}
 		if msg.removed {
-			heap.Remove(&d.schedule, i)
+			heap.Remove(msgs, i)
 			i--
 			n--
 			continue
 		}
-		if msg.queue == queue {
-			e = msg.envelope
-			msg.eid = eid
-			msg.availAt = now + int64(msg.envelope.Timeout)
-			msg.envelope.DecrRetry()
-			msg.accumlating = false
-			heap.Fix(&d.schedule, i)
-			d.ephemeralIndex[eid] = msg
-			return
-		}
+		e = msg.envelope
+		msg.eid = eid
+		msg.availAt = now + int64(msg.envelope.Timeout)
+		msg.envelope.DecrRetry()
+		msg.accumlating = false
+		heap.Fix(msgs, i)
+		d.ephemeralIndex[eid] = msg
+		return
 	}
 	err = storage.ErrEmpty
 	return
