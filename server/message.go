@@ -16,7 +16,7 @@ import (
 )
 
 func push(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
-	name := param.FromContext(ctx, "queue")
+	name := queueName(ctx)
 	q := queue.FromContext(ctx)
 	props, err := newProperties(r)
 	if err != nil {
@@ -46,7 +46,7 @@ func push(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 }
 
 func pop(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
-	name := param.FromContext(ctx, "queue")
+	name := queueName(ctx)
 	q := queue.FromContext(ctx)
 	envelope, eid, err := q.Dequeue(name)
 	if err != nil {

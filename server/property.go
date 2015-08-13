@@ -6,12 +6,11 @@ import (
 	"net/http"
 
 	"github.com/yosisa/pluq/queue"
-	"github.com/yosisa/pluq/server/param"
 	"golang.org/x/net/context"
 )
 
 func setProperties(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
-	name := param.FromContext(ctx, "queue")[1:] // strip leading slash
+	name := queueName(ctx)
 	q := queue.FromContext(ctx)
 	b, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -26,7 +25,7 @@ func setProperties(ctx context.Context, w http.ResponseWriter, r *http.Request) 
 }
 
 func getProperties(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
-	name := param.FromContext(ctx, "queue")[1:]
+	name := queueName(ctx)
 	q := queue.FromContext(ctx)
 	inherit := asBool(r.URL.Query().Get("inherit"))
 	if props := q.Properties(name, inherit); props != nil {
