@@ -8,6 +8,7 @@ import (
 
 	"github.com/jawher/mow.cli"
 	"github.com/yosisa/pluq/event"
+	"github.com/yosisa/pluq/queue"
 	"github.com/yosisa/pluq/server"
 	"github.com/yosisa/pluq/storage"
 	"github.com/yosisa/pluq/storage/bolt"
@@ -48,8 +49,8 @@ func main() {
 		defer d.Close()
 
 		ctx := context.Background()
-		ctx = storage.NewContext(ctx, d)
-		ctx = uid.NewContext(ctx, idgen)
+		ctx = queue.NewContext(ctx, queue.NewManager(idgen, d))
+
 		if err := http.ListenAndServe(*listen, server.New(ctx)); err != nil {
 			log.Fatal(err)
 		}
