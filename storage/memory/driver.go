@@ -123,7 +123,7 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err err
 		if msg.availAt > now {
 			break
 		}
-		if !msg.envelope.CanRetry() {
+		if !msg.envelope.Retry.IsValid() {
 			event.Emit(event.EventMessageDiscarded, msg.envelope)
 			msg.removed = true
 		}
@@ -136,7 +136,7 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err err
 		e = msg.envelope
 		msg.eid = eid
 		msg.availAt = now + int64(msg.envelope.Timeout)
-		msg.envelope.DecrRetry()
+		msg.envelope.Retry.Decr()
 		msg.accumlating = false
 		heap.Fix(msgs, i)
 		d.ephemeralIndex[eid] = msg

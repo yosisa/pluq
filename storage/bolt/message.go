@@ -3,10 +3,10 @@ package bolt
 import (
 	"bytes"
 	"io"
-	"time"
 
 	"github.com/tinylib/msgp/msgp"
 	"github.com/yosisa/pluq/storage"
+	"github.com/yosisa/pluq/types"
 )
 
 //go:generate msgp
@@ -46,7 +46,7 @@ func reconstruct(sd scheduleData, b []byte) (*storage.Envelope, error) {
 	}
 	envelope := &storage.Envelope{
 		Retry:   sd.retry(),
-		Timeout: time.Duration(sd.timeout()),
+		Timeout: types.Duration(sd.timeout()),
 	}
 	for _, m := range ms {
 		envelope.AddMessage(&storage.Message{

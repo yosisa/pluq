@@ -6,33 +6,31 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
-	"strconv"
-	"time"
 
+	"github.com/yosisa/pluq/queue"
 	"github.com/yosisa/pluq/server/param"
 	"github.com/yosisa/pluq/storage"
+	"github.com/yosisa/pluq/types"
 	"github.com/yosisa/pluq/uid"
 	"golang.org/x/net/context"
 )
 
 func push(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
-	queue := param.FromContext(ctx, "queue")
-	driver := storage.FromContext(ctx)
-	id, err := uid.NextID(ctx)
+	name := queueName(ctx)
+	q := queue.FromContext(ctx)
+	props, err := newProperties(r)
 	if err != nil {
 		return err
 	}
-	msg, err := newEnvelope(r)
+	b, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		return err
 	}
-	var opts storage.EnqueueOptions
-	if s := r.URL.Query().Get("accum_time"); s != "" {
-		if opts.AccumTime, err = time.ParseDuration(s); err != nil {
-			return err
-		}
+	msg := &storage.Message{
+		ContentType: r.Header.Get("Content-Type"),
+		Body:        b,
 	}
-	meta, err := driver.Enqueue(queue, id, msg, &opts)
+	meta, err := q.Enqueue(name, msg, props)
 	if err != nil {
 		return err
 	}
@@ -48,13 +46,9 @@ func push(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 }
 
 func pop(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
-	queue := param.FromContext(ctx, "queue")
-	driver := storage.FromContext(ctx)
-	eid, err := uid.NextID(ctx)
-	if err != nil {
-		return err
-	}
-	envelope, err := driver.Dequeue(queue, eid)
+	name := queueName(ctx)
+	q := queue.FromContext(ctx)
+	envelope, eid, err := q.Dequeue(name)
 	if err != nil {
 		return err
 	}
@@ -66,51 +60,46 @@ func reply(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	driver := storage.FromContext(ctx)
-	if err := driver.Ack(eid); err != nil {
+	q := queue.FromContext(ctx)
+	if err := q.Ack(eid); err != nil {
 		return err
 	}
 	fmt.Fprintf(w, "ok")
 	return nil
 }
 
-func newEnvelope(r *http.Request) (*storage.Envelope, error) {
-	envelope := storage.NewEnvelope()
+func newProperties(r *http.Request) (*queue.Properties, error) {
+	props := queue.NewProperties()
 	if s := r.URL.Query().Get("retry"); s != "" {
-		if s == "nolimit" {
-			envelope.Retry = storage.RetryNoLimit
-		} else {
-			n, err := strconv.Atoi(s)
-			if err != nil {
-				return nil, err
-			}
-			envelope.Retry = n
-		}
-	}
-	envelope.IncrRetry() // +1 for first attempt
-
-	if s := r.URL.Query().Get("timeout"); s != "" {
-		d, err := time.ParseDuration(s)
+		n, err := types.ParseRetry(s)
 		if err != nil {
 			return nil, err
 		}
-		envelope.Timeout = d
+		props.SetRetry(n)
 	}
 
-	b, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		return nil, err
+	if s := r.URL.Query().Get("timeout"); s != "" {
+		d, err := types.ParseDuration(s)
+		if err != nil {
+			return nil, err
+		}
+		props.SetTimeout(d)
 	}
-	envelope.AddMessage(&storage.Message{
-		ContentType: r.Header.Get("Content-Type"),
-		Body:        b,
-	})
-	return envelope, nil
+
+	if s := r.URL.Query().Get("accum_time"); s != "" {
+		d, err := types.ParseDuration(s)
+		if err != nil {
+			return nil, err
+		}
+		props.SetAccumTime(d)
+	}
+
+	return props, nil
 }
 
 func writeHTTP(w http.ResponseWriter, eid uid.ID, e *storage.Envelope) error {
 	w.Header().Set("X-Pluq-Message-Id", eid.HashID())
-	w.Header().Set("X-Pluq-Retry-Remaining", strconv.Itoa(e.Retry))
+	w.Header().Set("X-Pluq-Retry-Remaining", e.Retry.String())
 	w.Header().Set("X-Pluq-Timeout", e.Timeout.String())
 	if !e.IsComposite() {
 		w.Header().Set("Content-Type", e.Messages[0].ContentType)
