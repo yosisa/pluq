@@ -20,6 +20,9 @@ func New(ctx context.Context) http.Handler {
 	router.POST("/v1/queues/:queue/messages", f(push))
 	router.GET("/v1/queues/:queue/messages", f(pop))
 	router.DELETE("/v1/queues/:queue/messages/:id", f(reply))
+
+	router.GET("/v1/properties/*queue", f(getProperties))
+	router.PUT("/v1/properties/*queue", f(setProperties))
 	return router
 }
 
@@ -48,4 +51,12 @@ func handleError(ctx context.Context, w http.ResponseWriter, r *http.Request, er
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintln(w, err)
 	}
+}
+
+func asBool(s string) bool {
+	switch s {
+	case "y", "yes", "t", "true", "1":
+		return true
+	}
+	return false
 }

@@ -6,9 +6,9 @@ import (
 )
 
 type Properties struct {
-	Retry     *int
-	Timeout   *time.Duration
-	AccumTime *time.Duration
+	Retry     *int           `json:"retry,omitempty"`
+	Timeout   *time.Duration `json:"timeout,omitempty"`
+	AccumTime *time.Duration `json:"accum_time,omitempty"`
 }
 
 func NewProperties() *Properties {
