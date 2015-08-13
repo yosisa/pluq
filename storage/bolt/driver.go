@@ -9,6 +9,7 @@ import (
 	"github.com/boltdb/bolt"
 	"github.com/yosisa/pluq/event"
 	"github.com/yosisa/pluq/storage"
+	"github.com/yosisa/pluq/types"
 	"github.com/yosisa/pluq/uid"
 )
 
@@ -74,11 +75,11 @@ func (b scheduleData) messageID() []byte {
 	return b[:8]
 }
 
-func (b scheduleData) retry() int {
-	return int(binary.BigEndian.Uint32(b[8:]))
+func (b scheduleData) retry() types.Retry {
+	return types.Retry(binary.BigEndian.Uint32(b[8:]))
 }
 
-func (b scheduleData) setRetry(n int) {
+func (b scheduleData) setRetry(n types.Retry) {
 	binary.BigEndian.PutUint32(b[8:], uint32(n))
 }
 
@@ -231,7 +232,7 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err err
 			if skey.timestamp() > now {
 				return storage.ErrEmpty
 			}
-			if !storage.CanRetry(sval.retry()) {
+			if !sval.retry().IsValid() {
 				var envelope *storage.Envelope
 				if b := message.Get(sval.messageID()); b != nil {
 					envelope, _ = reconstruct(sval, b)
@@ -254,7 +255,9 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err err
 				nextTick := now + sd.timeout()
 				newkey.setTimestamp(nextTick)
 				newkey.setAccumlating(false)
-				sd.setRetry(storage.DecrRetry(sd.retry()))
+				retry := sd.retry()
+				retry.Decr()
+				sd.setRetry(retry)
 				if err := schedule.Put(newkey, sd); err != nil {
 					return err
 				}

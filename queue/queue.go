@@ -71,7 +71,7 @@ func newEnvelope(props *Properties, msg *storage.Message) *storage.Envelope {
 	if props.Retry != nil {
 		e.Retry = *props.Retry
 	}
-	e.IncrRetry() // +1 for first attempt
+	e.Retry.Incr() // +1 for first attempt
 
 	if props.Timeout != nil {
 		e.Timeout = *props.Timeout

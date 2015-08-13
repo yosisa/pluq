@@ -6,12 +6,11 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
-	"strconv"
-	"time"
 
 	"github.com/yosisa/pluq/queue"
 	"github.com/yosisa/pluq/server/param"
 	"github.com/yosisa/pluq/storage"
+	"github.com/yosisa/pluq/types"
 	"github.com/yosisa/pluq/uid"
 	"golang.org/x/net/context"
 )
@@ -72,19 +71,15 @@ func reply(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 func newProperties(r *http.Request) (*queue.Properties, error) {
 	props := queue.NewProperties()
 	if s := r.URL.Query().Get("retry"); s != "" {
-		if s == "nolimit" {
-			props.SetRetry(storage.RetryNoLimit)
-		} else {
-			n, err := strconv.Atoi(s)
-			if err != nil {
-				return nil, err
-			}
-			props.SetRetry(n)
+		n, err := types.ParseRetry(s)
+		if err != nil {
+			return nil, err
 		}
+		props.SetRetry(n)
 	}
 
 	if s := r.URL.Query().Get("timeout"); s != "" {
-		d, err := time.ParseDuration(s)
+		d, err := types.ParseDuration(s)
 		if err != nil {
 			return nil, err
 		}
@@ -92,7 +87,7 @@ func newProperties(r *http.Request) (*queue.Properties, error) {
 	}
 
 	if s := r.URL.Query().Get("accum_time"); s != "" {
-		d, err := time.ParseDuration(s)
+		d, err := types.ParseDuration(s)
 		if err != nil {
 			return nil, err
 		}
@@ -104,7 +99,7 @@ func newProperties(r *http.Request) (*queue.Properties, error) {
 
 func writeHTTP(w http.ResponseWriter, eid uid.ID, e *storage.Envelope) error {
 	w.Header().Set("X-Pluq-Message-Id", eid.HashID())
-	w.Header().Set("X-Pluq-Retry-Remaining", strconv.Itoa(e.Retry))
+	w.Header().Set("X-Pluq-Retry-Remaining", e.Retry.String())
 	w.Header().Set("X-Pluq-Timeout", e.Timeout.String())
 	if !e.IsComposite() {
 		w.Header().Set("Content-Type", e.Messages[0].ContentType)

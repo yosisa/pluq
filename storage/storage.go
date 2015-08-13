@@ -2,8 +2,8 @@ package storage
 
 import (
 	"errors"
-	"time"
 
+	"github.com/yosisa/pluq/types"
 	"github.com/yosisa/pluq/uid"
 	"golang.org/x/net/context"
 )
@@ -21,7 +21,7 @@ type Driver interface {
 }
 
 type EnqueueOptions struct {
-	AccumTime time.Duration
+	AccumTime types.Duration
 }
 
 type AccumState int

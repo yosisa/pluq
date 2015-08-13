@@ -2,30 +2,31 @@ package queue
 
 import (
 	"sync"
-	"time"
+
+	"github.com/yosisa/pluq/types"
 )
 
 type Properties struct {
-	Retry     *int           `json:"retry,omitempty"`
-	Timeout   *time.Duration `json:"timeout,omitempty"`
-	AccumTime *time.Duration `json:"accum_time,omitempty"`
+	Retry     *types.Retry    `json:"retry,omitempty"`
+	Timeout   *types.Duration `json:"timeout,omitempty"`
+	AccumTime *types.Duration `json:"accum_time,omitempty"`
 }
 
 func NewProperties() *Properties {
 	return &Properties{}
 }
 
-func (p *Properties) SetRetry(n int) *Properties {
+func (p *Properties) SetRetry(n types.Retry) *Properties {
 	p.Retry = &n
 	return p
 }
 
-func (p *Properties) SetTimeout(d time.Duration) *Properties {
+func (p *Properties) SetTimeout(d types.Duration) *Properties {
 	p.Timeout = &d
 	return p
 }
 
-func (p *Properties) SetAccumTime(d time.Duration) *Properties {
+func (p *Properties) SetAccumTime(d types.Duration) *Properties {
 	p.AccumTime = &d
 	return p
 }
