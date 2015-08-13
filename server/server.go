@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/yosisa/pluq/server/param"
@@ -62,5 +63,5 @@ func asBool(s string) bool {
 }
 
 func queueName(ctx context.Context) string {
-	return param.FromContext(ctx, "queue")[1:] // strip leading slash
+	return strings.Trim(param.FromContext(ctx, "queue"), "/")
 }

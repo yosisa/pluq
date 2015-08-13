@@ -63,6 +63,9 @@ func (q *Manager) SetProperties(name string, props *Properties) {
 }
 
 func split(name string) []string {
+	if name == "" {
+		return nil
+	}
 	return strings.Split(name, "/")
 }
 
