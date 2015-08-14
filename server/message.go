@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"mime/multipart"
@@ -34,15 +35,28 @@ func push(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	accum := "disabled"
+	results := make(map[string]*pushResult)
+	for k, v := range meta {
+		results[k] = newPushResult(v)
+	}
+	return json.NewEncoder(w).Encode(results)
+}
+
+type pushResult struct {
+	AccumState string `json:"accum_state"`
+}
+
+func newPushResult(meta *storage.EnqueueMeta) *pushResult {
+	var r pushResult
 	switch meta.AccumState {
 	case storage.AccumStarted:
-		accum = "started"
+		r.AccumState = "started"
 	case storage.AccumAdded:
-		accum = "added"
+		r.AccumState = "added"
+	default:
+		r.AccumState = "disabled"
 	}
-	fmt.Fprintf(w, `{"accum_state":"%s"}`, accum)
-	return nil
+	return &r
 }
 
 func pop(ctx context.Context, w http.ResponseWriter, r *http.Request) error {

@@ -21,18 +21,26 @@ func NewManager(idg *uid.Generator, sd storage.Driver) *Manager {
 	}
 }
 
-func (q *Manager) Enqueue(name string, msg *storage.Message, p *Properties) (*storage.EnqueueMeta, error) {
-	id, err := q.idg.Next()
-	if err != nil {
-		return nil, err
+func (q *Manager) Enqueue(name string, msg *storage.Message, p *Properties) (map[string]*storage.EnqueueMeta, error) {
+	out := make(map[string]*storage.EnqueueMeta)
+	for _, v := range q.root.findQueue(split(name)) {
+		key := strings.Join(v.keys, "/")
+		v.props.merge(p)
+		id, err := q.idg.Next()
+		if err != nil {
+			return out, err
+		}
+		var opts storage.EnqueueOptions
+		if v.props.AccumTime != nil {
+			opts.AccumTime = *v.props.AccumTime
+		}
+		meta, err := q.sd.Enqueue(key, id, newEnvelope(v.props, msg), &opts)
+		if err != nil {
+			return out, err
+		}
+		out[key] = meta
 	}
-	props := q.Properties(name, true)
-	props.merge(p)
-	var opts storage.EnqueueOptions
-	if props.AccumTime != nil {
-		opts.AccumTime = *props.AccumTime
-	}
-	return q.sd.Enqueue(name, id, newEnvelope(props, msg), &opts)
+	return out, nil
 }
 
 func (q *Manager) Dequeue(name string) (e *storage.Envelope, eid uid.ID, err error) {
