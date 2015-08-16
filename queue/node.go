@@ -38,6 +38,9 @@ func (p *Properties) SetRecurse(b bool) *Properties {
 }
 
 func (p *Properties) merge(other *Properties) {
+	if other == nil {
+		return
+	}
 	if other.Retry != nil {
 		p.SetRetry(*other.Retry)
 	}
@@ -53,13 +56,12 @@ func (p *Properties) merge(other *Properties) {
 }
 
 type node struct {
-	children map[string]*node
+	children *nodeMap
 	props    *Properties
-	m        sync.Mutex
 }
 
 func newNode() *node {
-	return &node{children: make(map[string]*node)}
+	return &node{children: newNodeMap()}
 }
 
 func (n *node) properties(keys []string) *Properties {
@@ -75,10 +77,7 @@ func (n *node) mergeProperties(keys []string, props *Properties) *node {
 	if len(keys) == 0 {
 		return n
 	}
-	if child := n.children[keys[0]]; child != nil {
-		return child.mergeProperties(keys[1:], props)
-	}
-	return nil
+	return n.children.get(keys[0]).mergeProperties(keys[1:], props)
 }
 
 func (n *node) setProperties(keys []string, props *Properties) {
@@ -86,32 +85,19 @@ func (n *node) setProperties(keys []string, props *Properties) {
 		n.props = props
 		return
 	}
-	n.m.Lock()
-	defer n.m.Unlock()
-	child := n.children[keys[0]]
-	if child == nil {
-		child = newNode()
-		n.children[keys[0]] = child
-	}
-	child.setProperties(keys[1:], props)
+	n.children.get(keys[0]).setProperties(keys[1:], props)
 }
 
 func (n *node) lookup(keys []string) *node {
 	if len(keys) == 0 {
 		return n
 	}
-	if child := n.children[keys[0]]; child != nil {
-		return child.lookup(keys[1:])
-	}
-	return nil
+	return n.children.get(keys[0]).lookup(keys[1:])
 }
 
 func (n *node) findQueue(keys []string) []*queue {
 	props := NewProperties()
 	node := n.mergeProperties(keys, props)
-	if node == nil {
-		return []*queue{{keys: keys, props: props}}
-	}
 	return node.findQueueRecurse(keys, *props)
 }
 
@@ -121,13 +107,39 @@ func (n *node) findQueueRecurse(keys []string, props Properties) []*queue {
 	if props.Recurse == nil || !*props.Recurse {
 		return targets
 	}
-	for name, child := range n.children {
+	n.children.RLock()
+	defer n.children.RUnlock()
+	for name, child := range n.children.m {
 		childKeys := make([]string, len(keys)+1)
 		copy(childKeys, keys)
 		childKeys[len(keys)] = name
 		targets = append(targets, child.findQueueRecurse(childKeys, props)...)
 	}
 	return targets
+}
+
+type nodeMap struct {
+	sync.RWMutex
+	m map[string]*node
+}
+
+func newNodeMap() *nodeMap {
+	return &nodeMap{m: make(map[string]*node)}
+}
+
+func (m *nodeMap) get(name string) *node {
+	m.RLock()
+	n := m.m[name]
+	m.RUnlock()
+	if n == nil {
+		m.Lock()
+		if n = m.m[name]; n == nil {
+			n = newNode()
+			m.m[name] = n
+		}
+		m.Unlock()
+	}
+	return n
 }
 
 type queue struct {

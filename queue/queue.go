@@ -47,6 +47,7 @@ func (q *Manager) Dequeue(name string) (e *storage.Envelope, eid uid.ID, err err
 	if eid, err = q.idg.Next(); err != nil {
 		return
 	}
+	q.root.lookup(split(name)) // create the corresponding queues here for later recursion
 	e, err = q.sd.Dequeue(name, eid)
 	return
 }

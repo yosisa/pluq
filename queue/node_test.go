@@ -40,6 +40,13 @@ func (s *NodeSuite) TestProperties(c *C) {
 	c.Assert(props, DeepEquals, NewProperties().SetRetry(2))
 }
 
+func (s *NodeSuite) TestAutoCreation(c *C) {
+	root := newNode()
+	root.properties([]string{"a", "b"})
+	c.Assert(root.lookup([]string{"a", "b"}), Equals, root.children.m["a"].children.m["b"])
+	c.Assert(root.lookup([]string{"a", "c"}), Equals, root.children.m["a"].children.m["c"])
+}
+
 func (s *NodeSuite) TestFindQueue(c *C) {
 	root := newNode()
 	q := root.findQueue([]string{"a"})
@@ -96,7 +103,7 @@ type ByName []*queue
 func (p ByName) Len() int { return len(p) }
 
 func (p ByName) Less(i, j int) bool {
-	return strings.Join(p[i].keys, "/") < strings.Join(p[i].keys, "/")
+	return strings.Join(p[i].keys, "/") < strings.Join(p[j].keys, "/")
 }
 
 func (p ByName) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
