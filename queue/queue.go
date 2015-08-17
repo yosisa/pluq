@@ -7,57 +7,124 @@ import (
 	"github.com/yosisa/pluq/uid"
 )
 
-type Manager struct {
-	idg  *uid.Generator
-	sd   storage.Driver
-	root *node
+type meDriver struct {
+	storage.Driver
 }
 
-func NewManager(idg *uid.Generator, sd storage.Driver) *Manager {
-	return &Manager{
-		idg:  idg,
-		sd:   sd,
-		root: newNode(),
-	}
-}
-
-func (q *Manager) Enqueue(name string, msg *storage.Message, p *Properties) (map[string]*storage.EnqueueMeta, error) {
+func (d *meDriver) EnqueueAll(es []*storage.Envelope, eos []*storage.EnqueueOptions) (map[string]*storage.EnqueueMeta, error) {
 	out := make(map[string]*storage.EnqueueMeta)
-	for _, v := range q.root.findQueue(split(name)) {
-		key := v.name()
-		v.props.merge(p)
-		id, err := q.idg.Next()
+	for i, e := range es {
+		meta, err := d.Enqueue(e.Queue, e.ID, e, eos[i])
 		if err != nil {
 			return out, err
 		}
-		var opts storage.EnqueueOptions
-		if v.props.AccumTime != nil {
-			opts.AccumTime = *v.props.AccumTime
-		}
-		meta, err := q.sd.Enqueue(key, id, newEnvelope(key, v.props, msg), &opts)
-		if err != nil {
-			return out, err
-		}
-		out[key] = meta
+		out[e.Queue] = meta
 	}
 	return out, nil
 }
 
-func (q *Manager) Dequeue(name string) (e *storage.Envelope, eid uid.ID, err error) {
-	if eid, err = q.idg.Next(); err != nil {
-		return
-	}
-	for _, v := range q.root.findQueue(split(name)) {
-		key := v.name()
-		if e, err = q.sd.Dequeue(key, eid); err == nil {
-			e.Queue = key
+type mdDriver struct {
+	storage.Driver
+}
+
+func (d *mdDriver) DequeueAny(names []string, eid uid.ID) (e *storage.Envelope, err error) {
+	for _, name := range names {
+		if e, err = d.Dequeue(name, eid); err == nil {
+			e.Queue = name
 			return
 		}
 		if err != storage.ErrEmpty {
 			return
 		}
 	}
-	err = storage.ErrEmpty
+	return nil, storage.ErrEmpty
+}
+
+type Manager struct {
+	idg  *uid.Generator
+	sd   storage.Driver
+	sme  storage.MultiEnqueuer
+	smd  storage.MultiDequeuer
+	root *node
+}
+
+func NewManager(idg *uid.Generator, sd storage.Driver) *Manager {
+	m := &Manager{
+		idg:  idg,
+		sd:   sd,
+		root: newNode(),
+	}
+	if sme, ok := sd.(storage.MultiEnqueuer); ok {
+		m.sme = sme
+	} else {
+		m.sme = &meDriver{sd}
+	}
+	if smd, ok := sd.(storage.MultiDequeuer); ok {
+		m.smd = smd
+	} else {
+		m.smd = &mdDriver{sd}
+	}
+	return m
+}
+
+func (q *Manager) Enqueue(name string, msg *storage.Message, p *Properties) (map[string]*storage.EnqueueMeta, error) {
+	queues := q.root.findQueue(split(name))
+	if len(queues) == 1 {
+		e, es, err := q.prepareEnqueue(queues[0], msg, p)
+		if err != nil {
+			return nil, err
+		}
+		meta, err := q.sd.Enqueue(e.Queue, e.ID, e, es)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]*storage.EnqueueMeta{e.Queue: meta}, nil
+	}
+
+	var es []*storage.Envelope
+	var eos []*storage.EnqueueOptions
+	for _, v := range queues {
+		e, eo, err := q.prepareEnqueue(v, msg, p)
+		if err != nil {
+			return nil, err
+		}
+		es = append(es, e)
+		eos = append(eos, eo)
+	}
+	return q.sme.EnqueueAll(es, eos)
+}
+
+func (q *Manager) prepareEnqueue(v *queue, msg *storage.Message, p *Properties) (*storage.Envelope, *storage.EnqueueOptions, error) {
+	id, err := q.idg.Next()
+	if err != nil {
+		return nil, nil, err
+	}
+	v.props.merge(p)
+	var opts storage.EnqueueOptions
+	if v.props.AccumTime != nil {
+		opts.AccumTime = *v.props.AccumTime
+	}
+	name := v.name()
+	e := newEnvelope(name, v.props, msg)
+	e.ID = id
+	e.Queue = name
+	return e, &opts, nil
+}
+
+func (q *Manager) Dequeue(name string) (e *storage.Envelope, eid uid.ID, err error) {
+	if eid, err = q.idg.Next(); err != nil {
+		return
+	}
+	queues := q.root.findQueue(split(name))
+	if len(queues) == 1 {
+		e, err = q.sd.Dequeue(queues[0].name(), eid)
+	} else {
+		var names []string
+		for _, v := range queues {
+			names = append(names, v.name())
+		}
+		e, err = q.smd.DequeueAny(names, eid)
+	}
 	return
 }
 

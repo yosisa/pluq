@@ -20,6 +20,14 @@ type Driver interface {
 	Close() error
 }
 
+type MultiEnqueuer interface {
+	EnqueueAll([]*Envelope, []*EnqueueOptions) (map[string]*EnqueueMeta, error)
+}
+
+type MultiDequeuer interface {
+	DequeueAny([]string, uid.ID) (*Envelope, error)
+}
+
 type EnqueueOptions struct {
 	AccumTime types.Duration
 }

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/yosisa/pluq/types"
+	"github.com/yosisa/pluq/uid"
 )
 
 var (
@@ -12,6 +13,7 @@ var (
 )
 
 type Envelope struct {
+	ID       uid.ID
 	Queue    string
 	Retry    types.Retry
 	Timeout  types.Duration
