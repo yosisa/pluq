@@ -12,6 +12,7 @@ var (
 )
 
 type Envelope struct {
+	Queue    string
 	Retry    types.Retry
 	Timeout  types.Duration
 	Messages []*Message

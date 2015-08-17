@@ -113,6 +113,7 @@ func newProperties(r *http.Request) (*queue.Properties, error) {
 
 func writeHTTP(w http.ResponseWriter, eid uid.ID, e *storage.Envelope) error {
 	w.Header().Set("X-Pluq-Message-Id", eid.HashID())
+	w.Header().Set("X-Pluq-Queue-Name", e.Queue)
 	w.Header().Set("X-Pluq-Retry-Remaining", e.Retry.String())
 	w.Header().Set("X-Pluq-Timeout", e.Timeout.String())
 	if !e.IsComposite() {

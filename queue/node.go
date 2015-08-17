@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/yosisa/pluq/types"
@@ -145,4 +146,8 @@ func (m *nodeMap) get(name string) *node {
 type queue struct {
 	keys  []string
 	props *Properties
+}
+
+func (q *queue) name() string {
+	return strings.Join(q.keys, "/")
 }

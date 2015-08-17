@@ -24,7 +24,7 @@ func NewManager(idg *uid.Generator, sd storage.Driver) *Manager {
 func (q *Manager) Enqueue(name string, msg *storage.Message, p *Properties) (map[string]*storage.EnqueueMeta, error) {
 	out := make(map[string]*storage.EnqueueMeta)
 	for _, v := range q.root.findQueue(split(name)) {
-		key := strings.Join(v.keys, "/")
+		key := v.name()
 		v.props.merge(p)
 		id, err := q.idg.Next()
 		if err != nil {
@@ -34,7 +34,7 @@ func (q *Manager) Enqueue(name string, msg *storage.Message, p *Properties) (map
 		if v.props.AccumTime != nil {
 			opts.AccumTime = *v.props.AccumTime
 		}
-		meta, err := q.sd.Enqueue(key, id, newEnvelope(v.props, msg), &opts)
+		meta, err := q.sd.Enqueue(key, id, newEnvelope(key, v.props, msg), &opts)
 		if err != nil {
 			return out, err
 		}
@@ -47,8 +47,17 @@ func (q *Manager) Dequeue(name string) (e *storage.Envelope, eid uid.ID, err err
 	if eid, err = q.idg.Next(); err != nil {
 		return
 	}
-	q.root.lookup(split(name)) // create the corresponding queues here for later recursion
-	e, err = q.sd.Dequeue(name, eid)
+	for _, v := range q.root.findQueue(split(name)) {
+		key := v.name()
+		if e, err = q.sd.Dequeue(key, eid); err == nil {
+			e.Queue = key
+			return
+		}
+		if err != storage.ErrEmpty {
+			return
+		}
+	}
+	err = storage.ErrEmpty
 	return
 }
 
@@ -78,8 +87,9 @@ func split(name string) []string {
 	return strings.Split(name, "/")
 }
 
-func newEnvelope(props *Properties, msg *storage.Message) *storage.Envelope {
+func newEnvelope(queue string, props *Properties, msg *storage.Message) *storage.Envelope {
 	e := storage.NewEnvelope()
+	e.Queue = queue
 	if props.Retry != nil {
 		e.Retry = *props.Retry
 	}
