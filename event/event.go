@@ -7,6 +7,7 @@ const (
 	EventMessagePoped
 	EventMessageProceeded
 	EventMessageDiscarded
+	EventMessageAvailable
 )
 
 type Handler interface {

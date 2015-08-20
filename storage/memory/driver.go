@@ -110,6 +110,9 @@ func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope, opts *sto
 		meta.AccumState = storage.AccumStarted
 	}
 	heap.Push(msgs, msg)
+	if opts.AccumTime == 0 {
+		event.Emit(event.EventMessageAvailable, queue)
+	}
 	return &meta, nil
 }
 

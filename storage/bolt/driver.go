@@ -203,6 +203,8 @@ func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope, opts *sto
 		})
 		if err == errConflict {
 			continue
+		} else if err == nil && opts.AccumTime == 0 {
+			event.Emit(event.EventMessageAvailable, queue)
 		}
 		return &meta, err
 	}
