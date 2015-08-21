@@ -103,19 +103,20 @@ START:
 }
 
 type waitRequest struct {
-	root     *node
-	keys     []string
-	c        chan *storage.Envelope
-	canceled bool
-	timer    *time.Timer
-	m        sync.Mutex
+	root   *node
+	keys   []string
+	c      chan *storage.Envelope
+	cancel <-chan struct{}
+	timer  *time.Timer
+	m      sync.Mutex
 }
 
-func newWaitRequest(root *node, name string, wait time.Duration) *waitRequest {
+func newWaitRequest(root *node, name string, wait time.Duration, cancel <-chan struct{}) *waitRequest {
 	w := &waitRequest{
-		root: root,
-		keys: split(name),
-		c:    make(chan *storage.Envelope),
+		root:   root,
+		keys:   split(name),
+		c:      make(chan *storage.Envelope),
+		cancel: cancel,
 	}
 	w.timer = time.AfterFunc(wait, func() {
 		w.m.Lock()
@@ -128,7 +129,7 @@ func newWaitRequest(root *node, name string, wait time.Duration) *waitRequest {
 func (w *waitRequest) match(name string) (bool, error) {
 	w.m.Lock()
 	defer w.m.Unlock()
-	if w.canceled {
+	if w.isCanceled() {
 		return false, errCanceled
 	}
 	for _, v := range w.root.findQueue(w.keys) {
@@ -142,7 +143,7 @@ func (w *waitRequest) match(name string) (bool, error) {
 func (w *waitRequest) handle(e *storage.Envelope) error {
 	w.m.Lock()
 	defer w.m.Unlock()
-	if w.canceled {
+	if w.isCanceled() {
 		return errCanceled
 	}
 	w.c <- e
@@ -150,8 +151,20 @@ func (w *waitRequest) handle(e *storage.Envelope) error {
 	return nil
 }
 
+// isCanceled returns true if the wait request has been canceled. It assumes
+// that this function is never called after handle is called.
+func (w *waitRequest) isCanceled() bool {
+	select {
+	case <-w.c:
+		return true
+	case <-w.cancel:
+		return true
+	default:
+		return false
+	}
+}
+
 func (w *waitRequest) close() {
 	w.timer.Stop()
-	w.canceled = true
 	close(w.c)
 }

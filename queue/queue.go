@@ -116,7 +116,7 @@ func (q *Manager) prepareEnqueue(v *queue, msg *storage.Message, p *Properties) 
 	return e, &opts, nil
 }
 
-func (q *Manager) Dequeue(name string, wait time.Duration) (e *storage.Envelope, err error) {
+func (q *Manager) Dequeue(name string, wait time.Duration, cancel <-chan struct{}) (e *storage.Envelope, err error) {
 	var eid uid.ID
 	if eid, err = q.idg.Next(); err != nil {
 		return
@@ -139,7 +139,7 @@ func (q *Manager) Dequeue(name string, wait time.Duration) (e *storage.Envelope,
 	// wait for a new message to be available
 	var ok bool
 	err = nil
-	w := newWaitRequest(q.root, name, wait)
+	w := newWaitRequest(q.root, name, wait, cancel)
 	q.waits.add(w)
 	if e, ok = <-w.c; !ok {
 		err = storage.ErrEmpty

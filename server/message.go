@@ -71,7 +71,15 @@ func pop(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
-	envelope, err := q.Dequeue(name, wait)
+	var cancel chan struct{}
+	if cn, ok := w.(http.CloseNotifier); ok {
+		cancel = make(chan struct{})
+		go func() {
+			<-cn.CloseNotify()
+			close(cancel)
+		}()
+	}
+	envelope, err := q.Dequeue(name, wait, cancel)
 	if err != nil {
 		return err
 	}
