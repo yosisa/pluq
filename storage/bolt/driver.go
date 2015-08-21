@@ -292,26 +292,10 @@ func (d *Driver) Dequeue(queue string, eid uid.ID) (e *storage.Envelope, err err
 }
 
 func (d *Driver) Ack(eid uid.ID) (err error) {
-	var rd replyData
-	err = d.db.View(func(tx *bolt.Tx) error {
-		ridx := tx.Bucket(bucketReplyIndex)
-		if ridx == nil {
-			return ErrBucketNotFound
-		}
-		v := ridx.Get(eid.Bytes())
-		if v == nil {
-			return storage.ErrInvalidEphemeralID
-		}
-		rd = replyData(cloneBytes(v))
-		return nil
-	})
+	rd, err := d.findReplyData(eid)
 	if err != nil {
-		return
+		return err
 	}
-	if rd.expireAt() <= time.Now().UnixNano() { // expired
-		return storage.ErrInvalidEphemeralID
-	}
-
 	return d.db.Update(func(tx *bolt.Tx) error {
 		schedule := tx.Bucket(bucketSchedule)
 		if schedule == nil {
@@ -331,9 +315,59 @@ func (d *Driver) Ack(eid uid.ID) (err error) {
 	})
 }
 
+func (d *Driver) Reset(eid uid.ID) error {
+	rd, err := d.findReplyData(eid)
+	if err != nil {
+		return err
+	}
+	return d.db.Update(func(tx *bolt.Tx) error {
+		schedule := tx.Bucket(bucketSchedule)
+		if schedule == nil {
+			return ErrBucketNotFound
+		}
+		message := tx.Bucket(bucketMessage)
+		if message == nil {
+			return ErrBucketNotFound
+		}
+		sv := schedule.Get(rd.scheduleID())
+		if sv == nil {
+			return storage.ErrInvalidEphemeralID
+		}
+		newkey := scheduleKey(cloneBytes(rd.scheduleID()))
+		newval := scheduleData(cloneBytes(sv))
+		if err := schedule.Delete(rd.scheduleID()); err != nil {
+			return err
+		}
+		newkey.setTimestamp(0)
+		retry := newval.retry()
+		retry.Incr()
+		newval.setRetry(retry)
+		return schedule.Put(newkey, newval)
+	})
+}
+
 func (d *Driver) Close() error {
 	close(d.closed)
 	return d.db.Close()
+}
+
+func (d *Driver) findReplyData(eid uid.ID) (rd replyData, err error) {
+	err = d.db.View(func(tx *bolt.Tx) error {
+		ridx := tx.Bucket(bucketReplyIndex)
+		if ridx == nil {
+			return ErrBucketNotFound
+		}
+		v := ridx.Get(eid.Bytes())
+		if v == nil {
+			return storage.ErrInvalidEphemeralID
+		}
+		rd = replyData(cloneBytes(v))
+		return nil
+	})
+	if err == nil && rd.expireAt() <= time.Now().UnixNano() { // expired
+		err = storage.ErrInvalidEphemeralID
+	}
+	return
 }
 
 func (d *Driver) gc(interval time.Duration) {

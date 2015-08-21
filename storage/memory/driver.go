@@ -161,6 +161,26 @@ func (d *Driver) Ack(eid uid.ID) error {
 	return nil
 }
 
+func (d *Driver) Reset(eid uid.ID) error {
+	now := time.Now().UnixNano()
+	d.m.Lock()
+	defer d.m.Unlock()
+	msg := d.ephemeralIndex[eid]
+	if msg == nil || msg.availAt <= now || msg.eid != eid || msg.removed {
+		return storage.ErrInvalidEphemeralID
+	}
+	msgs := d.queues.get(msg.envelope.Queue)
+	for i, m := range *msgs {
+		if m == msg {
+			m.availAt = 0
+			m.envelope.Retry.Incr()
+			heap.Fix(msgs, i)
+			return nil
+		}
+	}
+	return storage.ErrInvalidEphemeralID
+}
+
 func (d *Driver) Close() error {
 	return nil
 }

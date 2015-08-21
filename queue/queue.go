@@ -137,12 +137,11 @@ func (q *Manager) Dequeue(name string, wait time.Duration) (e *storage.Envelope,
 	}
 
 	// wait for a new message to be available
+	var ok bool
 	err = nil
 	w := newWaitRequest(q.root, name, wait)
 	q.waits.add(w)
-	select {
-	case e = <-w.c:
-	case <-time.After(wait):
+	if e, ok = <-w.c; !ok {
 		err = storage.ErrEmpty
 	}
 	return
@@ -167,7 +166,7 @@ func (q *Manager) SetProperties(name string, props *Properties) {
 	q.root.setProperties(split(name), props)
 }
 
-func (q *Manager) HandleEvent(e event.EventType, v interface{}) {
+func (q *Manager) HandleEvent(et event.EventType, v interface{}) {
 	name := v.(string)
 	w := q.waits.find(name)
 	if w == nil {
@@ -177,12 +176,31 @@ func (q *Manager) HandleEvent(e event.EventType, v interface{}) {
 	if err != nil {
 		return
 	}
-	if e, err := q.sd.Dequeue(name, eid); err == nil {
-		setEID(e, eid)
-		w.handle(e)
-		q.waits.remove(w)
-	} else {
+	e, err := q.sd.Dequeue(name, eid)
+	if err != nil {
 		q.waits.reset(w)
+		return
+	}
+	setEID(e, eid)
+	err = w.handle(e)
+	q.waits.remove(w)
+	if err == nil {
+		return
+	}
+
+	// The wait request already canceled, try to find a next wait request
+	for {
+		if w = q.waits.find(name); w == nil {
+			// Unfortunately, a message is dequeued but there is no wait request.
+			// Here we need to insert the message into top of the queue.
+			q.sd.Reset(e.ID)
+			return
+		}
+		err = w.handle(e)
+		q.waits.remove(w)
+		if err == nil {
+			return
+		}
 	}
 }
 

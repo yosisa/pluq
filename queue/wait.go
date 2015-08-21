@@ -8,11 +8,11 @@ import (
 	"github.com/yosisa/pluq/storage"
 )
 
-var errTimeout = errors.New("wait request timed out")
+var errCanceled = errors.New("wait request has been canceled")
 
 type waiter interface {
 	match(string) (bool, error)
-	handle(*storage.Envelope)
+	handle(*storage.Envelope) error
 }
 
 type waitItem struct {
@@ -106,21 +106,30 @@ type waitRequest struct {
 	root     *node
 	keys     []string
 	c        chan *storage.Envelope
-	deadline time.Time
+	canceled bool
+	timer    *time.Timer
+	m        sync.Mutex
 }
 
 func newWaitRequest(root *node, name string, wait time.Duration) *waitRequest {
-	return &waitRequest{
-		root:     root,
-		keys:     split(name),
-		c:        make(chan *storage.Envelope),
-		deadline: time.Now().Add(wait),
+	w := &waitRequest{
+		root: root,
+		keys: split(name),
+		c:    make(chan *storage.Envelope),
 	}
+	w.timer = time.AfterFunc(wait, func() {
+		w.m.Lock()
+		defer w.m.Unlock()
+		w.close()
+	})
+	return w
 }
 
 func (w *waitRequest) match(name string) (bool, error) {
-	if time.Now().After(w.deadline) {
-		return false, errTimeout
+	w.m.Lock()
+	defer w.m.Unlock()
+	if w.canceled {
+		return false, errCanceled
 	}
 	for _, v := range w.root.findQueue(w.keys) {
 		if v.name() == name {
@@ -130,7 +139,19 @@ func (w *waitRequest) match(name string) (bool, error) {
 	return false, nil
 }
 
-func (w *waitRequest) handle(e *storage.Envelope) {
+func (w *waitRequest) handle(e *storage.Envelope) error {
+	w.m.Lock()
+	defer w.m.Unlock()
+	if w.canceled {
+		return errCanceled
+	}
 	w.c <- e
+	w.close()
+	return nil
+}
+
+func (w *waitRequest) close() {
+	w.timer.Stop()
+	w.canceled = true
 	close(w.c)
 }
