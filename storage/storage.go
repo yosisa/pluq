@@ -17,6 +17,7 @@ type Driver interface {
 	Enqueue(string, uid.ID, *Envelope, *EnqueueOptions) (*EnqueueMeta, error)
 	Dequeue(string, uid.ID) (*Envelope, error)
 	Ack(uid.ID) error
+	Reset(uid.ID) error
 	Close() error
 }
 

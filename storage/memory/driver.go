@@ -110,6 +110,9 @@ func (d *Driver) Enqueue(queue string, id uid.ID, e *storage.Envelope, opts *sto
 		meta.AccumState = storage.AccumStarted
 	}
 	heap.Push(msgs, msg)
+	if opts.AccumTime == 0 {
+		event.Emit(event.EventMessageAvailable, queue)
+	}
 	return &meta, nil
 }
 
@@ -156,6 +159,26 @@ func (d *Driver) Ack(eid uid.ID) error {
 	}
 	msg.removed = true // Actual removing is performed in dequeue
 	return nil
+}
+
+func (d *Driver) Reset(eid uid.ID) error {
+	now := time.Now().UnixNano()
+	d.m.Lock()
+	defer d.m.Unlock()
+	msg := d.ephemeralIndex[eid]
+	if msg == nil || msg.availAt <= now || msg.eid != eid || msg.removed {
+		return storage.ErrInvalidEphemeralID
+	}
+	msgs := d.queues.get(msg.envelope.Queue)
+	for i, m := range *msgs {
+		if m == msg {
+			m.availAt = 0
+			m.envelope.Retry.Incr()
+			heap.Fix(msgs, i)
+			return nil
+		}
+	}
+	return storage.ErrInvalidEphemeralID
 }
 
 func (d *Driver) Close() error {

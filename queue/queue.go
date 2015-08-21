@@ -2,7 +2,9 @@ package queue
 
 import (
 	"strings"
+	"time"
 
+	"github.com/yosisa/pluq/event"
 	"github.com/yosisa/pluq/storage"
 	"github.com/yosisa/pluq/uid"
 )
@@ -41,18 +43,20 @@ func (d *mdDriver) DequeueAny(names []string, eid uid.ID) (e *storage.Envelope, 
 }
 
 type Manager struct {
-	idg  *uid.Generator
-	sd   storage.Driver
-	sme  storage.MultiEnqueuer
-	smd  storage.MultiDequeuer
-	root *node
+	idg   *uid.Generator
+	sd    storage.Driver
+	sme   storage.MultiEnqueuer
+	smd   storage.MultiDequeuer
+	root  *node
+	waits *waiters
 }
 
 func NewManager(idg *uid.Generator, sd storage.Driver) *Manager {
 	m := &Manager{
-		idg:  idg,
-		sd:   sd,
-		root: newNode(),
+		idg:   idg,
+		sd:    sd,
+		root:  newNode(),
+		waits: &waiters{},
 	}
 	if sme, ok := sd.(storage.MultiEnqueuer); ok {
 		m.sme = sme
@@ -64,6 +68,7 @@ func NewManager(idg *uid.Generator, sd storage.Driver) *Manager {
 	} else {
 		m.smd = &mdDriver{sd}
 	}
+	event.Handle(event.EventMessageAvailable, m)
 	return m
 }
 
@@ -111,7 +116,8 @@ func (q *Manager) prepareEnqueue(v *queue, msg *storage.Message, p *Properties) 
 	return e, &opts, nil
 }
 
-func (q *Manager) Dequeue(name string) (e *storage.Envelope, eid uid.ID, err error) {
+func (q *Manager) Dequeue(name string, wait time.Duration, cancel <-chan struct{}) (e *storage.Envelope, err error) {
+	var eid uid.ID
 	if eid, err = q.idg.Next(); err != nil {
 		return
 	}
@@ -124,6 +130,19 @@ func (q *Manager) Dequeue(name string) (e *storage.Envelope, eid uid.ID, err err
 			names = append(names, v.name())
 		}
 		e, err = q.smd.DequeueAny(names, eid)
+	}
+	if err != storage.ErrEmpty || wait == 0 {
+		setEID(e, eid)
+		return
+	}
+
+	// wait for a new message to be available
+	var ok bool
+	err = nil
+	w := newWaitRequest(q.root, name, wait, cancel)
+	q.waits.add(w)
+	if e, ok = <-w.c; !ok {
+		err = storage.ErrEmpty
 	}
 	return
 }
@@ -147,6 +166,44 @@ func (q *Manager) SetProperties(name string, props *Properties) {
 	q.root.setProperties(split(name), props)
 }
 
+func (q *Manager) HandleEvent(et event.EventType, v interface{}) {
+	name := v.(string)
+	w := q.waits.find(name)
+	if w == nil {
+		return
+	}
+	eid, err := q.idg.Next()
+	if err != nil {
+		return
+	}
+	e, err := q.sd.Dequeue(name, eid)
+	if err != nil {
+		q.waits.reset(w)
+		return
+	}
+	setEID(e, eid)
+	err = w.handle(e)
+	q.waits.remove(w)
+	if err == nil {
+		return
+	}
+
+	// The wait request already canceled, try to find a next wait request
+	for {
+		if w = q.waits.find(name); w == nil {
+			// Unfortunately, a message is dequeued but there is no wait request.
+			// Here we need to insert the message into top of the queue.
+			q.sd.Reset(e.ID)
+			return
+		}
+		err = w.handle(e)
+		q.waits.remove(w)
+		if err == nil {
+			return
+		}
+	}
+}
+
 func split(name string) []string {
 	if name == "" {
 		return nil
@@ -167,4 +224,10 @@ func newEnvelope(queue string, props *Properties, msg *storage.Message) *storage
 	}
 	e.AddMessage(msg)
 	return e
+}
+
+func setEID(e *storage.Envelope, id uid.ID) {
+	if e != nil {
+		e.ID = id
+	}
 }

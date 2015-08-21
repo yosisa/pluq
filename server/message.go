@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"time"
 
 	"github.com/yosisa/pluq/queue"
 	"github.com/yosisa/pluq/server/param"
@@ -62,11 +63,27 @@ func newPushResult(meta *storage.EnqueueMeta) *pushResult {
 func pop(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	name := queueName(ctx)
 	q := queue.FromContext(ctx)
-	envelope, eid, err := q.Dequeue(name)
+	var wait time.Duration
+	if s := r.URL.Query().Get("wait"); s != "" {
+		var err error
+		wait, err = time.ParseDuration(s)
+		if err != nil {
+			return err
+		}
+	}
+	var cancel chan struct{}
+	if cn, ok := w.(http.CloseNotifier); ok {
+		cancel = make(chan struct{})
+		go func() {
+			<-cn.CloseNotify()
+			close(cancel)
+		}()
+	}
+	envelope, err := q.Dequeue(name, wait, cancel)
 	if err != nil {
 		return err
 	}
-	return writeHTTP(w, eid, envelope)
+	return writeHTTP(w, envelope)
 }
 
 func reply(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
@@ -111,8 +128,8 @@ func newProperties(r *http.Request) (*queue.Properties, error) {
 	return props, nil
 }
 
-func writeHTTP(w http.ResponseWriter, eid uid.ID, e *storage.Envelope) error {
-	w.Header().Set("X-Pluq-Message-Id", eid.HashID())
+func writeHTTP(w http.ResponseWriter, e *storage.Envelope) error {
+	w.Header().Set("X-Pluq-Message-Id", e.ID.HashID())
 	w.Header().Set("X-Pluq-Queue-Name", e.Queue)
 	w.Header().Set("X-Pluq-Retry-Remaining", e.Retry.String())
 	w.Header().Set("X-Pluq-Timeout", e.Timeout.String())
